@@ -1,0 +1,13 @@
+{
+  "name": "oncoco-proto",
+  "image": "mcr.microsoft.com/devcontainers/typescript-node:24",
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1": {}
+  },
+  "mounts": [
+    "source=npm-cache,target=/home/node/.npm,type=volume",
+    "source=claude-config-${devcontainerId},target=/home/node/.claude,type=volume"
+  ],
+  "postCreateCommand": "sudo chown -R node:node /home/node/.npm /home/node/.claude",
+  "forwardPorts": [5173]
+}
