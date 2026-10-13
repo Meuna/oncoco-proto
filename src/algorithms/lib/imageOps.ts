@@ -8,6 +8,16 @@ export function toGray(img: ImageData, out: Uint8Array): void {
   }
 }
 
+/** Deinterleaves RGBA into three channel planes (alpha is dropped). */
+export function splitRGB(img: ImageData, r: Uint8Array, g: Uint8Array, b: Uint8Array): void {
+  const d = img.data;
+  for (let i = 0, p = 0; p < r.length; i += 4, p++) {
+    r[p] = d[i]!;
+    g[p] = d[i + 1]!;
+    b[p] = d[i + 2]!;
+  }
+}
+
 /** 3×3 box blur (borders are copied). */
 export function boxBlur3(src: Uint8Array, dst: Uint8Array, w: number, h: number): void {
   dst.set(src);
@@ -123,6 +133,34 @@ export function sobel(
       mag[i] = Math.sqrt(dx * dx + dy * dy);
     }
   }
+}
+
+/**
+ * Otsu threshold of a 256-bin histogram (`total` = sum of the bins): the level `t`
+ * maximizing the between-class variance of {≤ t} vs {> t}.
+ */
+export function otsuThreshold(hist: ArrayLike<number>, total: number): number {
+  let sumAll = 0;
+  for (let i = 0; i < 256; i++) sumAll += i * hist[i]!;
+  let w0 = 0;
+  let sum0 = 0;
+  let best = 0;
+  let bestVar = -1;
+  for (let t = 0; t < 256; t++) {
+    w0 += hist[t]!;
+    if (w0 === 0) continue;
+    const w1 = total - w0;
+    if (w1 === 0) break;
+    sum0 += t * hist[t]!;
+    const m0 = sum0 / w0;
+    const m1 = (sumAll - sum0) / w1;
+    const v = w0 * w1 * (m0 - m1) * (m0 - m1);
+    if (v > bestVar) {
+      bestVar = v;
+      best = t;
+    }
+  }
+  return best;
 }
 
 /** Work buffers, reallocated only when the size changes. */
