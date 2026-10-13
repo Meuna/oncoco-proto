@@ -1,5 +1,6 @@
 import { canny } from './canny';
 import { colorSegmentation } from './colorSegmentation';
+import { ellipseFit } from './ellipseFit';
 import { houghCircles } from './houghCircles';
 import { houghCirclesOpencv } from './houghCirclesOpencv';
 import { passthrough } from './passthrough';
@@ -16,5 +17,6 @@ export const algorithms: readonly AlgorithmEntry[] = [
   canny,
   houghCircles,
   houghCirclesOpencv,
+  ellipseFit,
   colorSegmentation,
 ];

@@ -53,6 +53,7 @@
   - Baseline: `src/algorithms/passthrough.ts` (`input: 'none'`, inline object processor).
   - Params + stage timings: `src/algorithms/canny.ts` + `canny.processor.ts` (640 px, σ/low/high sliders, overlay toggle).
   - OpenCV.js: `src/algorithms/houghCirclesOpencv.ts` + `houghCirclesOpencv.processor.ts` (480 px, `cv.HoughCircles`, 6 sliders, `backend: 'wasm'`).
+  - OpenCV.js contours: `src/algorithms/ellipseFit.ts` + `ellipseFit.processor.ts` (Canny → `findContours` → `fitEllipse`, `MatVector`, per-contour `get(i)` deleted in `finally`).
 
 ## 5. Adding a new algorithm: checklist
 1. `src/algorithms/<camelName>.processor.ts`: export `class <Pascal>Processor implements Processor<R>`, and export the result type (`R`) from this file.
@@ -80,7 +81,7 @@
 - Language: code comments in english; fix french comments into english when encountering. UI strings and `index.html` `lang` stay French.
 - Resolution:
   - Camera requests ideal width 1280.
-  - Processing width is set per algorithm (`sobel` 320, `canny` 640, `houghCircles` 240, `houghCirclesOpencv` 480).
+  - Processing width is set per algorithm (`sobel` 320, `canny` 640, `houghCircles` 240, `houghCirclesOpencv` 480, `ellipseFit` 480).
   - The core sets **no global cap**, and `videoFrame` input is never downscaled.
   - Overlay DPR is capped at 2.
 - **No target FPS is defined.** The loop runs at camera rate (rVFC) or display rate (rAF) and skips frames while busy.
