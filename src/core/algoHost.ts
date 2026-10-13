@@ -1,8 +1,16 @@
-import type { AlgorithmEntry, FrameInput, Renderer } from '../algorithms/types';
+import type {
+  AlgorithmEntry,
+  FrameInput,
+  ParamSpec,
+  ParamValue,
+  ParamValues,
+  Renderer,
+} from '../algorithms/types';
 import { WorkerClient, type ProcessReply } from './workerClient';
 import { errorMessage } from './workerProtocol';
 
 const STORAGE_KEY = 'oncoco.algo';
+const PARAMS_KEY_PREFIX = 'oncoco.params.';
 
 export interface LoadingState {
   label: string;
@@ -16,34 +24,37 @@ export interface AlgoHostOptions {
   onChange(algo: ActiveAlgorithm | null): void;
 }
 
-/** Algorithme prêt : processor initialisé dans le worker, renderer sur le thread principal. */
+/** Ready algorithm: processor initialized in the worker, renderer on the main thread. */
 export interface ActiveAlgorithm {
   entry: AlgorithmEntry;
   renderer: Renderer<unknown>;
 }
 
-/** Gère l'algorithme actif et le changement à chaud. Le calcul est délégué à un worker. */
+/** Manages the active algorithm and hot switching. Computation is delegated to a worker. */
 export class AlgoHost {
   current: ActiveAlgorithm | null = null;
-  /** Incrémenté à chaque changement : permet d'ignorer les résultats/chargements périmés. */
+  /** Incremented on every switch: lets stale results/loads be ignored. */
   generation = 0;
+  /** Parameter values of the algorithm being loaded or active. */
+  params: ParamValues = {};
 
   private readonly worker = new WorkerClient();
   private readonly entries: readonly AlgorithmEntry[];
   private readonly opts: AlgoHostOptions;
+  private paramsEntry: AlgorithmEntry | null = null;
 
   constructor(entries: readonly AlgorithmEntry[], opts: AlgoHostOptions) {
     this.entries = entries;
     this.opts = opts;
   }
 
-  /** Algorithme mémorisé s'il existe toujours, sinon le premier du registre. */
+  /** Saved algorithm if it still exists, otherwise the first one of the registry. */
   initialId(): string | undefined {
     let saved: string | null = null;
     try {
       saved = localStorage.getItem(STORAGE_KEY);
     } catch {
-      // stockage indisponible (navigation privée, etc.)
+      // storage unavailable (private browsing, etc.)
     }
     return this.entries.find((e) => e.id === saved)?.id ?? this.entries[0]?.id;
   }
@@ -52,8 +63,8 @@ export class AlgoHost {
     const gen = ++this.generation;
     const isStale = () => gen !== this.generation;
 
-    // Un éventuel `process` en cours pour l'ancien algo est ignoré (génération périmée) ;
-    // le worker attend sa fin avant de disposer le processor.
+    // A pending `process` for the old algorithm is ignored (stale generation);
+    // the worker waits for it to finish before disposing the processor.
     const previous = this.current;
     this.current = null;
     this.opts.onChange(null);
@@ -65,9 +76,11 @@ export class AlgoHost {
       return;
     }
 
+    this.paramsEntry = entry;
+    this.params = loadParams(entry);
     this.opts.onLoading({ label: entry.label, progress: null });
     try {
-      await this.worker.load(id, gen, (progress, message) => {
+      await this.worker.load(id, gen, { ...this.params }, (progress, message) => {
         if (!isStale()) this.opts.onLoading({ label: entry.label, progress, message });
       });
       if (isStale()) return;
@@ -76,7 +89,7 @@ export class AlgoHost {
       try {
         localStorage.setItem(STORAGE_KEY, id);
       } catch {
-        // ignoré
+        // ignored
       }
       this.opts.onLoading(null);
       this.opts.onChange(this.current);
@@ -88,10 +101,51 @@ export class AlgoHost {
     }
   }
 
-  /** Traite une frame dans le worker avec l'algorithme de la génération `gen`. */
+  /** Changes one parameter of the current algorithm, saves it and forwards it to the worker. */
+  setParam(key: string, value: ParamValue): void {
+    const entry = this.paramsEntry;
+    const spec = entry?.params?.find((p) => p.key === key);
+    if (!entry || !spec) return;
+    const v = sanitize(spec, value);
+    if (v === undefined) return;
+    this.params = { ...this.params, [key]: v };
+    try {
+      localStorage.setItem(PARAMS_KEY_PREFIX + entry.id, JSON.stringify(this.params));
+    } catch {
+      // ignored
+    }
+    this.worker.setParams(this.generation, { ...this.params });
+  }
+
+  /** Processes a frame in the worker with the algorithm of generation `gen`. */
   process(gen: number, frame: FrameInput, t: number, transfer: Transferable[]): Promise<ProcessReply> {
     return this.worker.process(gen, frame, t, transfer);
   }
+}
+
+/** Spec defaults, overridden by valid saved values. */
+function loadParams(entry: AlgorithmEntry): ParamValues {
+  const values: ParamValues = {};
+  if (!entry.params) return values;
+  let saved: Record<string, unknown> = {};
+  try {
+    const raw = localStorage.getItem(PARAMS_KEY_PREFIX + entry.id);
+    const parsed: unknown = raw ? JSON.parse(raw) : null;
+    if (parsed && typeof parsed === 'object') saved = parsed as Record<string, unknown>;
+  } catch {
+    // storage unavailable or corrupted value: defaults
+  }
+  for (const spec of entry.params) {
+    values[spec.key] = sanitize(spec, saved[spec.key]) ?? spec.default;
+  }
+  return values;
+}
+
+/** Valid value for `spec` (ranges are clamped), or `undefined`. */
+function sanitize(spec: ParamSpec, value: unknown): ParamValue | undefined {
+  if (spec.type === 'toggle') return typeof value === 'boolean' ? value : undefined;
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.min(spec.max, Math.max(spec.min, value));
 }
 
 function safeDispose(renderer: Renderer<unknown>): void {

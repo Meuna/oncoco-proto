@@ -9,7 +9,7 @@ import { createUI } from './ui/dom';
 const ui = createUI(document.querySelector<HTMLDivElement>('#app')!, algorithms);
 const perf = new PerfStats();
 
-// `loop` est créé juste après : les callbacks ne sont appelés qu'au premier switchTo.
+// `loop` is created right after: callbacks are only called from the first switchTo.
 let loop: FrameLoop;
 const host = new AlgoHost(algorithms, {
   onLoading: (state) => ui.setLoading(state),
@@ -18,6 +18,7 @@ const host = new AlgoHost(algorithms, {
     perf.resetAlgo();
     loop.clear();
     if (algo) ui.select.value = algo.entry.id;
+    ui.setParams(algo?.entry.params, host.params, (key, value) => host.setParam(key, value));
   },
 });
 loop = new FrameLoop(ui.video, ui.canvas, host, perf);
@@ -34,7 +35,7 @@ async function onStart(): Promise<void> {
     return;
   }
   for (const track of stream.getVideoTracks()) {
-    // iOS coupe la caméra quand l'app passe en arrière-plan.
+    // iOS stops the camera when the app goes to the background.
     track.addEventListener('ended', onCameraLost, { once: true });
   }
   ui.hideStart();
@@ -81,11 +82,12 @@ setInterval(() => {
     `drop  ${perf.dropped}`,
     `src   ${src}${input}`,
     `back  ${algo ? (algo.entry.backend ?? '?') : '—'}`,
+    ...perf.stageMs.map(([name, ms]) => `  ${name.padEnd(6)} ${ms.toFixed(1)} ms`),
   ].join('\n');
 }, 250);
 
-// Charge l'algorithme dès le démarrage : ses assets se chargent pendant que
-// l'utilisateur autorise la caméra.
+// Load the algorithm right away: its assets load while the user grants
+// camera access.
 const initialId = host.initialId();
 if (initialId) {
   ui.select.value = initialId;

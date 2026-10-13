@@ -1,46 +1,64 @@
-/** Formats d'entrée qu'un processor peut recevoir (`null` si `input: 'none'`). */
+/** Input formats a processor can receive (`null` when `input: 'none'`). */
 export type FrameInput = ImageData | VideoFrame | null;
 
 /**
- * Projection des coordonnées de l'entrée (espace de la frame passée à `process`)
- * vers les pixels du canvas overlay, en tenant compte du recadrage `object-fit: cover`.
+ * Maps coordinates of the input (space of the frame passed to `process`)
+ * to overlay canvas pixels, accounting for the `object-fit: cover` crop.
  */
 export interface CoordMapper {
-  /** Dimensions de la frame passée à `process` (éventuellement réduite). */
+  /** Size of the frame passed to `process` (possibly downscaled). */
   readonly srcWidth: number;
   readonly srcHeight: number;
-  /** Pixels canvas par pixel source, par axe (égaux à l'arrondi près). */
+  /** Canvas pixels per source pixel, per axis (equal up to rounding). */
   readonly scaleX: number;
   readonly scaleY: number;
-  /** Moyenne de scaleX/scaleY : pour convertir des longueurs (rayons, épaisseurs). */
+  /** Mean of scaleX/scaleY: converts lengths (radii, thicknesses). */
   readonly scale: number;
-  /** Ratio pixels canvas / pixels CSS : pour des épaisseurs de trait constantes à l'écran. */
+  /** Canvas pixels / CSS pixels ratio: for line widths that stay constant on screen. */
   readonly dpr: number;
   toScreen(x: number, y: number): { x: number; y: number };
-  /** Applique la transformation au contexte : on peut ensuite dessiner en coordonnées source. */
+  /** Applies the transform to the context: you can then draw in source coordinates. */
   applyTransform(ctx: CanvasRenderingContext2D): void;
 }
 
 export interface InitContext {
-  /** Annulé si l'utilisateur change d'algorithme pendant le chargement. */
+  /** Aborted if the user switches algorithm during loading. */
   signal: AbortSignal;
-  /** Progression du chargement : `p` dans [0, 1], ou `null` si indéterminée. */
+  /** Loading progress: `p` in [0, 1], or `null` when indeterminate. */
   onProgress(p: number | null, message?: string): void;
 }
 
-/** Partie calcul, exécutée dans le worker. */
+export type ParamValue = number | boolean;
+export type ParamValues = Record<string, ParamValue>;
+
+/** A user-tunable parameter, rendered as a control in the params panel. */
+export type ParamSpec =
+  | { key: string; label: string; type: 'range'; min: number; max: number; step: number; default: number }
+  | { key: string; label: string; type: 'toggle'; default: boolean };
+
+/** Compute side, runs in the worker. */
 export interface Processor<R> {
   init(ctx: InitContext): Promise<void>;
   process(frame: FrameInput, t: number): Promise<R> | R;
   /**
-   * Objets du résultat à transférer (sans copie) vers le thread principal.
-   * Ils sont inutilisables dans le worker ensuite : ne pas les réutiliser d'une frame à l'autre.
+   * Result objects to transfer (without copy) to the main thread.
+   * They become unusable in the worker afterwards: don't reuse them across frames.
    */
   transferables?(result: R): Transferable[];
+  /**
+   * Current values of the entry's `params`. Called after `init`, before the first
+   * `process`, then on every change.
+   */
+  setParams?(values: Readonly<ParamValues>): void;
+  /**
+   * Per-stage durations (ms) of the last `process`. Insertion order is display order
+   * in the perf overlay.
+   */
+  stageTimings?(): Record<string, number>;
   dispose(): void;
 }
 
-/** Partie dessin, exécutée sur le thread principal. */
+/** Drawing side, runs on the main thread. */
 export interface Renderer<R> {
   draw(result: R, ctx: CanvasRenderingContext2D, map: CoordMapper): void;
   dispose?(): void;
@@ -49,17 +67,19 @@ export interface Renderer<R> {
 export interface AlgorithmEntry<R = unknown> {
   id: string;
   label: string;
-  /** Format d'entrée envoyé au worker. Défaut : 'imageData'. 'none' : aucune frame. */
+  /** Input format sent to the worker. Default: 'imageData'. 'none': no frame. */
   input?: 'imageData' | 'videoFrame' | 'none';
-  /** Largeur max de l'ImageData fournie (réduction côté cœur, ratio conservé). */
+  /** Max width of the provided ImageData (downscaled by the core, aspect ratio kept). */
   maxInputWidth?: number;
-  /** Backend d'exécution affiché dans l'overlay perf (ex. 'js-cpu', 'wasm', 'webgpu'). */
+  /** Execution backend shown in the perf overlay (e.g. 'js-cpu', 'wasm', 'webgpu'). */
   backend?: string;
+  /** Tunable parameters exposed in the UI, passed to `Processor.setParams`. */
+  params?: readonly ParamSpec[];
   /**
-   * Appelé dans le worker uniquement. Préférer un `import()` dynamique : le code de calcul
-   * n'est alors chargé que par le worker, à la demande.
+   * Called in the worker only. Prefer a dynamic `import()`: the compute code is then
+   * loaded by the worker only, on demand.
    */
   createProcessor(): Processor<R> | Promise<Processor<R>>;
-  /** Appelé sur le thread principal, une fois le processor prêt. */
+  /** Called on the main thread, once the processor is ready. */
   createRenderer(): Renderer<R>;
 }

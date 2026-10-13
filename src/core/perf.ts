@@ -1,13 +1,13 @@
 const WINDOW = 30;
 
 export class PerfStats {
-  /** Résultats traités et dessinés par seconde. */
+  /** Results processed and drawn per second. */
   fps = 0;
-  /** Frames vues par la boucle par seconde (caméra si rVFC, affichage si rAF). */
+  /** Frames seen by the loop per second (camera with rVFC, display with rAF). */
   loopFps = 0;
-  /** Moyenne glissante du temps de process (dans le worker) sur les WINDOW dernières frames. */
+  /** Moving average of the process time (in the worker) over the last WINDOW frames. */
   processMs = 0;
-  /** Idem, de la capture de la frame à la réception du résultat (capture + transferts + attente). */
+  /** Same, from frame capture to result reception (capture + transfers + waiting). */
   roundTripMs = 0;
   dropped = 0;
   inputWidth = 0;
@@ -15,6 +15,8 @@ export class PerfStats {
 
   private readonly process = new MovingAverage();
   private readonly roundTrip = new MovingAverage();
+  /** Per-stage moving averages, in the order reported by the processor. */
+  private readonly stages = new Map<string, { avg: MovingAverage; ms: number }>();
 
   private windowStart = performance.now();
   private processedInWindow = 0;
@@ -32,18 +34,37 @@ export class PerfStats {
     }
   }
 
-  processed(ms: number, roundTripMs: number, inputWidth: number, inputHeight: number): void {
+  processed(
+    ms: number,
+    roundTripMs: number,
+    inputWidth: number,
+    inputHeight: number,
+    stages?: Record<string, number>,
+  ): void {
     this.processedInWindow++;
     this.inputWidth = inputWidth;
     this.inputHeight = inputHeight;
     this.processMs = this.process.add(ms);
     this.roundTripMs = this.roundTrip.add(roundTripMs);
+    if (stages) {
+      for (const [name, v] of Object.entries(stages)) {
+        let s = this.stages.get(name);
+        if (!s) this.stages.set(name, (s = { avg: new MovingAverage(), ms: 0 }));
+        s.ms = s.avg.add(v);
+      }
+    }
   }
 
-  /** Remet à zéro les mesures propres à l'algorithme (au changement d'algo). */
+  /** Averaged per-stage durations, `[name, ms]`. */
+  get stageMs(): [string, number][] {
+    return [...this.stages].map(([name, s]) => [name, s.ms]);
+  }
+
+  /** Resets the algorithm-specific measurements (on algorithm switch). */
   resetAlgo(): void {
     this.process.reset();
     this.roundTrip.reset();
+    this.stages.clear();
     this.processMs = this.roundTripMs = this.fps = 0;
     this.dropped = 0;
     this.inputWidth = this.inputHeight = 0;
@@ -57,7 +78,7 @@ class MovingAverage {
   private index = 0;
   private sum = 0;
 
-  /** Ajoute un échantillon et renvoie la nouvelle moyenne. */
+  /** Adds a sample and returns the new average. */
   add(v: number): number {
     this.sum += v - (this.count === WINDOW ? this.samples[this.index]! : 0);
     this.samples[this.index] = v;

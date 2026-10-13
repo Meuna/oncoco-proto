@@ -18,7 +18,7 @@
 - Camera (`src/core/camera.ts`): `facingMode: { ideal: 'environment' }`, `width: { ideal: 1280 }`, no audio. It must be called from a user gesture (the start button), and errors are typed as `CameraError`.
 - Loop (`src/core/loop.ts`): only one frame is in flight at a time, and frames that arrive meanwhile are skipped. The overlay canvas is sized as CSS size × `min(devicePixelRatio, MAX_DPR=2)`.
 - Switching (`src/core/algoHost.ts`): a `generation` counter discards stale loads and results. The worker waits for an in-flight `process`, then calls `dispose`. The choice is saved in `localStorage['oncoco.algo']`.
-- Protocol: `src/core/workerProtocol.ts` (`load`/`process` in, `progress`/`ready`/`loadError`/`result`/`processError` out).
+- Protocol: `src/core/workerProtocol.ts` (`load`/`setParams`/`process` in, `progress`/`ready`/`loadError`/`result`/`processError` out).
 - Wiring and perf panel text: `src/main.ts`. DOM: `src/ui/dom.ts`.
 
 ## 4. Algorithm contract (`src/algorithms/types.ts`)
@@ -39,12 +39,18 @@
   - `CoordMapper` handles the `object-fit: cover` crop. Use `toScreen(x,y)` with `scale` for lengths and `dpr` for constant line widths, or call `applyTransform(ctx)` and draw in source pixels.
 - `R` must be structured-cloneable (plain objects, typed arrays, `ImageData`…, no classes with methods).
 - Registration: add the entry to the `algorithms` array in `src/algorithms/registry.ts`. Array order is dropdown order, and the first entry is the default.
-- **Parameters: not supported.** No mechanism exists to expose algorithm params to the UI. Tunables are module-level `const`s in the processor (see `houghCircles.processor.ts`).
-- Perf: no algorithm-side reporting is required. The worker measures the `process` duration (`proc`) and the loop measures capture→result (`rtt`), as 30-frame moving averages (`src/core/perf.ts`).
+- Parameters (opt-in):
+  - Declare `params?: ParamSpec[]` on the entry (`{ type: 'range', min, max, step, default }` or `{ type: 'toggle', default }`). The UI shows a `⚙` button and panel only for algorithms that have params.
+  - The processor implements `setParams?(values)`. The worker calls it after `init`, before the first `process`, then on every change, always with the full set of values. Read the values with `typeof` guards.
+  - Values are validated against the specs (ranges are clamped) and saved per algorithm in `localStorage['oncoco.params.<id>']` (`AlgoHost.setParam`).
+  - Params reach the processor only, not the renderer: encode display options in the result (see Canny's overlay toggle).
+  - Other tunables stay module-level `const`s in the processor (see `houghCircles.processor.ts`).
+- Perf: no algorithm-side reporting is required. The worker measures the `process` duration (`proc`) and the loop measures capture→result (`rtt`), as 30-frame moving averages (`src/core/perf.ts`). Optional `stageTimings?()` returns per-stage ms of the last `process` (insertion order = display order), shown as extra lines in the perf panel.
 - References:
   - Pixel output: `src/algorithms/sobel.ts` + `sobel.processor.ts`. Returns a new `ImageData`, transfers its buffer, and draws via an offscreen canvas and `applyTransform`.
   - Vector output: `src/algorithms/houghCircles.ts` + `houghCircles.processor.ts`. Returns `Circle[]` and draws with `toScreen`/`scale`/`dpr`.
   - Baseline: `src/algorithms/passthrough.ts` (`input: 'none'`, inline object processor).
+  - Params + stage timings: `src/algorithms/canny.ts` + `canny.processor.ts` (640 px, σ/low/high sliders, overlay toggle).
 
 ## 5. Adding a new algorithm: checklist
 1. `src/algorithms/<camelName>.processor.ts`: export `class <Pascal>Processor implements Processor<R>`, and export the result type (`R`) from this file.
@@ -55,6 +61,7 @@
 4. Reuse `src/algorithms/lib/imageOps.ts`, don't duplicate it:
    - `toGray` (RGBA → `Uint8Array`, BT.601 integer)
    - `boxBlur3`
+   - `gaussianBlur` (separable, σ, needs the `tmp` buffer)
    - `sobel` (writes `gx`, `gy`, `mag`)
    - `Buffers` (`gray`/`blur`/`gx`/`gy`/`mag`)
    - `assertImageData`
@@ -64,10 +71,10 @@
 7. Run `npm run build`, which includes the strict `tsc`. Then test on a real device over HTTPS.
 
 ## 6. Constraints & conventions
-- Language: english. Fix french comments into english when encountering.
+- Language: code comments in english; fix french comments into english when encountering. UI strings and `index.html` `lang` stay French.
 - Resolution:
   - Camera requests ideal width 1280.
-  - Processing width is set per algorithm (`sobel` 320, `houghCircles` 240).
+  - Processing width is set per algorithm (`sobel` 320, `canny` 640, `houghCircles` 240).
   - The core sets **no global cap**, and `videoFrame` input is never downscaled.
   - Overlay DPR is capped at 2.
 - **No target FPS is defined.** The loop runs at camera rate (rVFC) or display rate (rAF) and skips frames while busy.
@@ -79,7 +86,6 @@
   - TypeScript ESM, strict `tsconfig` (`noUncheckedIndexedAccess`, so use `arr[i]!` in hot loops; `verbatimModuleSyntax`, so use `import type`; `erasableSyntaxOnly`, so no enums or parameter properties).
   - 2-space indent, single quotes, semicolons, trailing commas.
   - **No formatter or linter is configured.**
-  - Code comments, UI strings and `index.html` `lang` are French. README is English.
 
 ## 7. Testing & validation
 - No automated tests and no test framework. The only gate is `tsc` (run by `build` and `typecheck`; it passes at this commit). CI deploys without a separate check step.

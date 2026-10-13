@@ -1,10 +1,12 @@
-import type { FrameInput } from '../algorithms/types';
+import type { FrameInput, ParamValues } from '../algorithms/types';
 import type { FromWorker, ToWorker } from './workerProtocol';
 
 export interface ProcessReply {
   result: unknown;
-  /** Durée de `process` dans le worker (hors transferts). */
+  /** Duration of `process` in the worker (excluding transfers). */
   ms: number;
+  /** Per-stage durations reported by the processor, if any. */
+  stages?: Record<string, number>;
 }
 
 interface PendingLoad {
@@ -19,13 +21,13 @@ interface PendingProcess {
   reject(err: Error): void;
 }
 
-/** Côté thread principal du worker de calcul : requêtes → promesses. */
+/** Main-thread side of the compute worker: requests → promises. */
 export class WorkerClient {
   private readonly worker = new Worker(new URL('../worker.ts', import.meta.url), { type: 'module' });
   private pendingLoad: PendingLoad | null = null;
   private readonly pending = new Map<number, PendingProcess>();
   private seq = 0;
-  /** Erreur fatale (ex. module du worker non chargeable) : toutes les requêtes échouent. */
+  /** Fatal error (e.g. worker module failed to load): every request fails. */
   private fatal: Error | null = null;
 
   constructor() {
@@ -36,18 +38,24 @@ export class WorkerClient {
     });
   }
 
-  /** Remplace l'algorithme du worker. Un chargement précédent non terminé est rejeté. */
-  load(id: string, gen: number, onProgress: PendingLoad['onProgress']): Promise<void> {
+  /** Replaces the worker's algorithm. A previous unfinished load is rejected. */
+  load(id: string, gen: number, params: ParamValues, onProgress: PendingLoad['onProgress']): Promise<void> {
     this.pendingLoad?.reject(new Error('Chargement remplacé'));
     this.pendingLoad = null;
     if (this.fatal) return Promise.reject(this.fatal);
     return new Promise((resolve, reject) => {
       this.pendingLoad = { gen, resolve, reject, onProgress };
-      this.post({ type: 'load', gen, id });
+      this.post({ type: 'load', gen, id, params });
     });
   }
 
-  /** Les objets de `transfer` (buffer de l'ImageData, VideoFrame…) sont cédés au worker. */
+  /** Updates the parameters of generation `gen` (ignored by the worker if stale). */
+  setParams(gen: number, values: ParamValues): void {
+    if (this.fatal) return;
+    this.post({ type: 'setParams', gen, values });
+  }
+
+  /** Objects in `transfer` (ImageData buffer, VideoFrame…) are handed over to the worker. */
   process(gen: number, frame: FrameInput, t: number, transfer: Transferable[]): Promise<ProcessReply> {
     if (this.fatal) return Promise.reject(this.fatal);
     const seq = ++this.seq;
@@ -87,7 +95,7 @@ export class WorkerClient {
         const p = this.pending.get(msg.seq);
         if (!p) return;
         this.pending.delete(msg.seq);
-        if (msg.type === 'result') p.resolve({ result: msg.result, ms: msg.ms });
+        if (msg.type === 'result') p.resolve({ result: msg.result, ms: msg.ms, stages: msg.stages });
         else p.reject(new Error(msg.message));
         return;
       }

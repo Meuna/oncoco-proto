@@ -8,8 +8,8 @@ const MAX_DPR = 2;
 export const hasVideoFrameCallback = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
 /**
- * Boucle de traitement : une frame à la fois envoyée au worker, les frames arrivant
- * pendant un traitement en cours sont sautées. Le dessin reste sur le thread principal.
+ * Processing loop: one frame at a time is sent to the worker; frames arriving
+ * while one is being processed are skipped. Drawing stays on the main thread.
  */
 export class FrameLoop {
   private running = false;
@@ -90,14 +90,14 @@ export class FrameLoop {
     } catch (err) {
       if (gen === this.host.generation && this.loggedErrorGen !== gen) {
         this.loggedErrorGen = gen;
-        console.error(`[${algo.entry.id}] process a échoué`, err);
+        console.error(`[${algo.entry.id}] process failed`, err);
       }
       return;
     }
     const roundTrip = performance.now() - t0;
     if (gen !== this.host.generation) return;
 
-    this.perf.processed(reply.ms, roundTrip, grabbed.width, grabbed.height);
+    this.perf.processed(reply.ms, roundTrip, grabbed.width, grabbed.height, reply.stages);
     this.clear();
     const map = createCoordMapper(
       grabbed.width,
