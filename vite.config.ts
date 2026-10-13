@@ -6,6 +6,8 @@ const REPO_BASE = '/oncoco-proto/';
 
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? REPO_BASE : '/',
+  // Worker module : nécessaire pour les import() dynamiques des processors.
+  worker: { format: 'es' },
   plugins: [
     VitePWA({
       registerType: 'autoUpdate',

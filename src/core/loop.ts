@@ -1,5 +1,4 @@
-import type { VisionAlgorithm } from '../algorithms/types';
-import type { AlgoHost } from './algoHost';
+import type { ActiveAlgorithm, AlgoHost } from './algoHost';
 import { createCoordMapper } from './coords';
 import { FrameSource } from './frameSource';
 import type { PerfStats } from './perf';
@@ -9,8 +8,8 @@ const MAX_DPR = 2;
 export const hasVideoFrameCallback = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
 
 /**
- * Boucle de traitement : une frame à la fois, les frames arrivant pendant
- * un traitement en cours sont sautées.
+ * Boucle de traitement : une frame à la fois envoyée au worker, les frames arrivant
+ * pendant un traitement en cours sont sautées. Le dessin reste sur le thread principal.
  */
 export class FrameLoop {
   private running = false;
@@ -46,11 +45,6 @@ export class FrameLoop {
     else cancelAnimationFrame(this.handle);
   }
 
-  /** Résout quand aucun traitement n'est en cours. */
-  waitIdle(): Promise<void> {
-    return this.inflight ?? Promise.resolve();
-  }
-
   clear(): void {
     this.ctx.setTransform(1, 0, 0, 1, 0, 0);
     this.ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -82,25 +76,28 @@ export class FrameLoop {
     });
   }
 
-  private async run(algo: VisionAlgorithm<unknown>, gen: number, t: number): Promise<void> {
-    const grabbed = this.source.grab(this.video, algo, t);
+  private async run(algo: ActiveAlgorithm, gen: number, t: number): Promise<void> {
     const t0 = performance.now();
-    let result: unknown;
+    let reply;
+    let grabbed;
     try {
-      result = await algo.process(grabbed.frame, t);
+      grabbed = this.source.grab(this.video, algo.entry, t);
+      try {
+        reply = await this.host.process(gen, grabbed.frame, t, grabbed.transfer);
+      } finally {
+        grabbed.release();
+      }
     } catch (err) {
-      if (this.loggedErrorGen !== gen) {
+      if (gen === this.host.generation && this.loggedErrorGen !== gen) {
         this.loggedErrorGen = gen;
-        console.error(`[${algo.id}] process a échoué`, err);
+        console.error(`[${algo.entry.id}] process a échoué`, err);
       }
       return;
-    } finally {
-      grabbed.release();
     }
-    const dt = performance.now() - t0;
+    const roundTrip = performance.now() - t0;
     if (gen !== this.host.generation) return;
 
-    this.perf.processed(dt, grabbed.width, grabbed.height);
+    this.perf.processed(reply.ms, roundTrip, grabbed.width, grabbed.height);
     this.clear();
     const map = createCoordMapper(
       grabbed.width,
@@ -113,7 +110,7 @@ export class FrameLoop {
     );
     this.ctx.save();
     try {
-      algo.draw(result, this.ctx, map);
+      algo.renderer.draw(reply.result, this.ctx, map);
     } finally {
       this.ctx.restore();
     }

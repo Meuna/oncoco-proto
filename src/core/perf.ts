@@ -5,16 +5,16 @@ export class PerfStats {
   fps = 0;
   /** Frames vues par la boucle par seconde (caméra si rVFC, affichage si rAF). */
   loopFps = 0;
-  /** Moyenne glissante du temps de process sur les WINDOW dernières frames. */
+  /** Moyenne glissante du temps de process (dans le worker) sur les WINDOW dernières frames. */
   processMs = 0;
+  /** Idem, de la capture de la frame à la réception du résultat (capture + transferts + attente). */
+  roundTripMs = 0;
   dropped = 0;
   inputWidth = 0;
   inputHeight = 0;
 
-  private readonly samples = new Float64Array(WINDOW);
-  private sampleCount = 0;
-  private sampleIndex = 0;
-  private sampleSum = 0;
+  private readonly process = new MovingAverage();
+  private readonly roundTrip = new MovingAverage();
 
   private windowStart = performance.now();
   private processedInWindow = 0;
@@ -32,24 +32,42 @@ export class PerfStats {
     }
   }
 
-  processed(ms: number, inputWidth: number, inputHeight: number): void {
+  processed(ms: number, roundTripMs: number, inputWidth: number, inputHeight: number): void {
     this.processedInWindow++;
     this.inputWidth = inputWidth;
     this.inputHeight = inputHeight;
-    this.sampleSum += ms - (this.sampleCount === WINDOW ? this.samples[this.sampleIndex]! : 0);
-    this.samples[this.sampleIndex] = ms;
-    this.sampleIndex = (this.sampleIndex + 1) % WINDOW;
-    if (this.sampleCount < WINDOW) this.sampleCount++;
-    this.processMs = this.sampleSum / this.sampleCount;
+    this.processMs = this.process.add(ms);
+    this.roundTripMs = this.roundTrip.add(roundTripMs);
   }
 
   /** Remet à zéro les mesures propres à l'algorithme (au changement d'algo). */
   resetAlgo(): void {
-    this.samples.fill(0);
-    this.sampleCount = this.sampleIndex = this.sampleSum = 0;
-    this.processMs = this.fps = 0;
+    this.process.reset();
+    this.roundTrip.reset();
+    this.processMs = this.roundTripMs = this.fps = 0;
     this.dropped = 0;
     this.inputWidth = this.inputHeight = 0;
     this.processedInWindow = 0;
+  }
+}
+
+class MovingAverage {
+  private readonly samples = new Float64Array(WINDOW);
+  private count = 0;
+  private index = 0;
+  private sum = 0;
+
+  /** Ajoute un échantillon et renvoie la nouvelle moyenne. */
+  add(v: number): number {
+    this.sum += v - (this.count === WINDOW ? this.samples[this.index]! : 0);
+    this.samples[this.index] = v;
+    this.index = (this.index + 1) % WINDOW;
+    if (this.count < WINDOW) this.count++;
+    return this.sum / this.count;
+  }
+
+  reset(): void {
+    this.samples.fill(0);
+    this.count = this.index = this.sum = 0;
   }
 }

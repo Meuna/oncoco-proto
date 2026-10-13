@@ -1,4 +1,6 @@
-import type { AlgorithmEntry, VisionAlgorithm } from '../algorithms/types';
+import type { AlgorithmEntry, FrameInput, Renderer } from '../algorithms/types';
+import { WorkerClient, type ProcessReply } from './workerClient';
+import { errorMessage } from './workerProtocol';
 
 const STORAGE_KEY = 'oncoco.algo';
 
@@ -9,20 +11,24 @@ export interface LoadingState {
 }
 
 export interface AlgoHostOptions {
-  /** Résout quand aucun `process` n'est en cours (évite de disposer un algo en plein calcul). */
-  waitIdle(): Promise<void>;
   onLoading(state: LoadingState | null): void;
   onError(message: string): void;
-  onChange(algo: VisionAlgorithm<unknown> | null): void;
+  onChange(algo: ActiveAlgorithm | null): void;
 }
 
-/** Gère l'algorithme actif et le changement à chaud. */
+/** Algorithme prêt : processor initialisé dans le worker, renderer sur le thread principal. */
+export interface ActiveAlgorithm {
+  entry: AlgorithmEntry;
+  renderer: Renderer<unknown>;
+}
+
+/** Gère l'algorithme actif et le changement à chaud. Le calcul est délégué à un worker. */
 export class AlgoHost {
-  current: VisionAlgorithm<unknown> | null = null;
+  current: ActiveAlgorithm | null = null;
   /** Incrémenté à chaque changement : permet d'ignorer les résultats/chargements périmés. */
   generation = 0;
 
-  private abort: AbortController | null = null;
+  private readonly worker = new WorkerClient();
   private readonly entries: readonly AlgorithmEntry[];
   private readonly opts: AlgoHostOptions;
 
@@ -46,18 +52,12 @@ export class AlgoHost {
     const gen = ++this.generation;
     const isStale = () => gen !== this.generation;
 
-    this.abort?.abort();
-    const abort = new AbortController();
-    this.abort = abort;
-
+    // Un éventuel `process` en cours pour l'ancien algo est ignoré (génération périmée) ;
+    // le worker attend sa fin avant de disposer le processor.
     const previous = this.current;
     this.current = null;
     this.opts.onChange(null);
-    if (previous) {
-      await this.opts.waitIdle();
-      safeDispose(previous);
-    }
-    if (isStale()) return;
+    if (previous) safeDispose(previous.renderer);
 
     const entry = this.entries.find((e) => e.id === id);
     if (!entry) {
@@ -66,20 +66,13 @@ export class AlgoHost {
     }
 
     this.opts.onLoading({ label: entry.label, progress: null });
-    let algo: VisionAlgorithm<unknown> | null = null;
     try {
-      algo = await entry.create();
-      if (isStale()) return;
-      await algo.init({
-        signal: abort.signal,
-        onProgress: (progress, message) => {
-          if (!isStale()) this.opts.onLoading({ label: entry.label, progress, message });
-        },
+      await this.worker.load(id, gen, (progress, message) => {
+        if (!isStale()) this.opts.onLoading({ label: entry.label, progress, message });
       });
       if (isStale()) return;
 
-      this.current = algo;
-      algo = null; // possession transférée
+      this.current = { entry, renderer: entry.createRenderer() };
       try {
         localStorage.setItem(STORAGE_KEY, id);
       } catch {
@@ -92,20 +85,19 @@ export class AlgoHost {
       console.error(err);
       this.opts.onLoading(null);
       this.opts.onError(`Échec d'initialisation de « ${entry.label} » : ${errorMessage(err)}`);
-    } finally {
-      if (algo) safeDispose(algo);
     }
+  }
+
+  /** Traite une frame dans le worker avec l'algorithme de la génération `gen`. */
+  process(gen: number, frame: FrameInput, t: number, transfer: Transferable[]): Promise<ProcessReply> {
+    return this.worker.process(gen, frame, t, transfer);
   }
 }
 
-function safeDispose(algo: VisionAlgorithm<unknown>): void {
+function safeDispose(renderer: Renderer<unknown>): void {
   try {
-    algo.dispose();
+    renderer.dispose?.();
   } catch (err) {
     console.error(err);
   }
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

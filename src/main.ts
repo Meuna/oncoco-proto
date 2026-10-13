@@ -12,13 +12,12 @@ const perf = new PerfStats();
 // `loop` est créé juste après : les callbacks ne sont appelés qu'au premier switchTo.
 let loop: FrameLoop;
 const host = new AlgoHost(algorithms, {
-  waitIdle: () => loop.waitIdle(),
   onLoading: (state) => ui.setLoading(state),
   onError: (message) => ui.showError(message),
   onChange: (algo) => {
     perf.resetAlgo();
     loop.clear();
-    if (algo) ui.select.value = algo.id;
+    if (algo) ui.select.value = algo.entry.id;
   },
 });
 loop = new FrameLoop(ui.video, ui.canvas, host, perf);
@@ -77,10 +76,11 @@ setInterval(() => {
       : '';
   ui.perfPanel.textContent = [
     `FPS   ${perf.fps.toFixed(1)} (${hasVideoFrameCallback ? 'cam' : 'raf'} ${perf.loopFps.toFixed(1)})`,
-    `proc  ${perf.processMs.toFixed(1)} ms (moy. 30)`,
+    `proc  ${perf.processMs.toFixed(1)} ms (worker, moy. 30)`,
+    `rtt   ${perf.roundTripMs.toFixed(1)} ms`,
     `drop  ${perf.dropped}`,
     `src   ${src}${input}`,
-    `back  ${algo ? (algo.backend ?? '?') : '—'}`,
+    `back  ${algo ? (algo.entry.backend ?? '?') : '—'}`,
   ].join('\n');
 }, 250);
 
