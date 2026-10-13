@@ -1,12 +1,12 @@
 import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
-// GitHub Pages sert le site sous /<NOM_REPO>/ : à adapter si le dépôt est renommé.
+// GitHub Pages serves the site under /<REPO_NAME>/: update this if the repo is renamed.
 const REPO_BASE = '/oncoco-proto/';
 
 export default defineConfig(({ command }) => ({
   base: command === 'build' ? REPO_BASE : '/',
-  // Worker module : nécessaire pour les import() dynamiques des processors.
+  // Module worker: required for the processors' dynamic import().
   worker: { format: 'es' },
   plugins: [
     VitePWA({
@@ -32,6 +32,8 @@ export default defineConfig(({ command }) => ({
       },
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,webmanifest}'],
+        // OpenCV.js (~10 MB) is fetched on demand only, like models and wasm.
+        globIgnores: ['**/opencv-*.js'],
       },
     }),
   ],
